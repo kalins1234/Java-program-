@@ -1,0 +1,16 @@
+# Compiled Java bytecode
+*.class
+
+# Build output directories
+target/
+out/
+build/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+*.eclipse
+.classpath
+.project
+.settings/
