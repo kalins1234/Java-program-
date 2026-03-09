@@ -70,6 +70,7 @@ public class BacktestResult {
     // Getters and Setters
     public String getStrategyName()         { return strategyName; }
     public String getSymbol()               { return symbol; }
+    public String getDescription()          { return strategyName + " on " + symbol; }
     public List<BacktestTrade> getTrades()  { return trades; }
 
     public double getInitialCapital()       { return initialCapital; }

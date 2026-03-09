@@ -12,6 +12,8 @@ import com.nse.algotrading.orders.OrderManager;
 import com.nse.algotrading.risk.RiskManager;
 import com.nse.algotrading.strategy.*;
 import com.nse.algotrading.util.MarketUtils;
+import com.nse.algotrading.visualization.BacktestHtmlReporter;
+import com.nse.algotrading.visualization.ConsoleDashboard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,6 +55,7 @@ public class AlgoTradingApp {
 
     private volatile boolean running = false;
     private Timer squareOffTimer;
+    private ConsoleDashboard dashboard;
 
     public AlgoTradingApp() {
         this.config       = TradingConfig.getInstance();
@@ -76,14 +79,26 @@ public class AlgoTradingApp {
         BacktestResult result = backtester.run(strategy, historicalData,
                 config.getInitialCapital());
         result.printReport();
+
+        // Generate interactive HTML report
+        try {
+            BacktestHtmlReporter reporter = new BacktestHtmlReporter();
+            String reportPath = reporter.generate(result);
+            System.out.println("\n  HTML report: " + reportPath);
+            System.out.println("  Open in a browser to view interactive charts.\n");
+        } catch (Exception e) {
+            log.warn("Could not generate HTML report: {}", e.getMessage());
+        }
     }
 
     // ── Mode 2 & 3: Paper / Live Trading ─────────────────────────────────────
 
     public void startTrading(String[] symbols, String strategyName) throws Exception {
-        log.info("Starting {} trading mode for symbols: {}",
-                config.isPaperTrading() ? "PAPER" : "LIVE",
-                Arrays.toString(symbols));
+        String mode = config.isPaperTrading() ? "PAPER" : "LIVE";
+        log.info("Starting {} trading mode for symbols: {}", mode, Arrays.toString(symbols));
+
+        // Init console dashboard
+        dashboard = new ConsoleDashboard(mode, riskManager);
 
         // Initialize strategies for each symbol
         for (String symbol : symbols) {
@@ -117,6 +132,8 @@ public class AlgoTradingApp {
         log.info("Trading system live. Press Ctrl+C to stop.");
         while (running) {
             Thread.sleep(1000);
+            // Refresh console dashboard every second
+            dashboard.refresh(orderManager.getOpenPositions());
             if (!MarketUtils.isMarketOpen()) {
                 log.info("Market closed. Stopping trading loop.");
                 shutdown();
@@ -128,6 +145,9 @@ public class AlgoTradingApp {
      * Core tick handler — called for every market tick.
      */
     private void onTick(Tick tick) {
+        // Always feed dashboard for live price display (even when risk-halted)
+        if (dashboard != null) dashboard.onTick(tick);
+
         if (!MarketUtils.isSafeToTrade()) return;
         if (riskManager.isTradingHalted())   return;
 
@@ -139,7 +159,17 @@ public class AlgoTradingApp {
 
             if (signal != null && signal.getAction() != Signal.Action.HOLD) {
                 log.info("Signal received: {}", signal);
-                orderManager.processSignal(signal);
+                if (dashboard != null) {
+                    dashboard.logSignal(signal.getAction() + " " + signal.getSymbol()
+                            + " @ ₹" + String.format("%.2f", signal.getPrice())
+                            + " [" + signal.getStrategyName() + "]");
+                }
+                var order = orderManager.processSignal(signal);
+                if (order != null && dashboard != null) {
+                    dashboard.logOrder(order.getTransactionType() + " " + order.getSymbol()
+                            + " qty=" + order.getQuantity()
+                            + " [" + (config.isPaperTrading() ? "PAPER" : "LIVE") + "]");
+                }
             }
         }
     }
@@ -200,11 +230,16 @@ public class AlgoTradingApp {
 
     /**
      * Simulated trading loop for demo (no real WebSocket connection needed).
+     * Runs all symbols, shows live console dashboard, then generates HTML report.
      */
     private void runSimulatedLoop(String[] symbols, String strategyName) throws InterruptedException {
         log.info("Running SIMULATED trading loop (demo mode — no broker connection)");
 
-        // Generate and replay historical data as simulated ticks
+        if (dashboard == null) {
+            dashboard = new ConsoleDashboard("PAPER", riskManager);
+        }
+
+        // Collect all trades per symbol for a combined backtest report
         for (String symbol : symbols) {
             List<OHLCV> data = generateSyntheticData(symbol, 300);
             TradingStrategy strategy = createStrategy(strategyName, symbol);
@@ -217,15 +252,31 @@ public class AlgoTradingApp {
 
                 Tick tick = new Tick(symbol, bar.getClose(),
                         bar.getVolume(), bar.getTimestamp());
+                tick.setOpen(bar.getOpen());
+                tick.setHigh(bar.getHigh());
+                tick.setLow(bar.getLow());
+                tick.setChangePercent(
+                        bar.getOpen() > 0 ? (bar.getClose() - bar.getOpen()) / bar.getOpen() * 100 : 0);
+
                 strategy.onTick(tick);
+                dashboard.onTick(tick);
 
                 Signal signal = strategy.generateSignal();
                 if (signal != null && signal.getAction() != Signal.Action.HOLD) {
-                    log.info("[SIMULATED] {}", signal);
-                    orderManager.processSignal(signal);
+                    dashboard.logSignal(signal.getAction() + " " + symbol
+                            + " @ ₹" + String.format("%.2f", signal.getPrice()));
+                    var order = orderManager.processSignal(signal);
+                    if (order != null) {
+                        dashboard.logOrder(order.getTransactionType() + " " + symbol
+                                + " qty=" + order.getQuantity() + " [PAPER]");
+                    }
                 }
 
-                Thread.sleep(10);  // 10ms between bars for demo
+                // Refresh dashboard every 10 simulated bars
+                if (i % 10 == 0) {
+                    dashboard.refresh(orderManager.getOpenPositions());
+                    Thread.sleep(50);
+                }
             }
         }
 
