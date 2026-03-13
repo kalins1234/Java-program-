@@ -14,3 +14,13 @@ build/
 .classpath
 .project
 .settings/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.egg-info/
+dist/
+.venv/
+venv/
